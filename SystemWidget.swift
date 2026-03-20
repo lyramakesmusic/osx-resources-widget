@@ -172,8 +172,9 @@ struct LineShape: Shape {
     }
 }
 
-// Inset well for graphs — translucent material, not glass
+// Inset well for graphs
 struct GraphWell<Content: View>: View {
+    @Environment(\.colorScheme) var scheme
     let content: Content
     init(@ViewBuilder content: () -> Content) { self.content = content() }
     var body: some View {
@@ -184,7 +185,7 @@ struct GraphWell<Content: View>: View {
         .padding(1)
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.black.opacity(0.45))
+            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.black.opacity(scheme == .dark ? 0.45 : 0.12))
         }
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
@@ -194,8 +195,9 @@ struct GraphWell<Content: View>: View {
 
 struct CPUPanel: View {
     @ObservedObject var stats: SystemStats
-    private let accent = Color(hue: 0.40, saturation: 0.50, brightness: 0.88)
-    private let sysClr = Color(hue: 0.08, saturation: 0.50, brightness: 0.92)
+    @Environment(\.colorScheme) var scheme
+    var accent: Color { scheme == .dark ? Color(hue: 0.40, saturation: 0.50, brightness: 0.88) : .green }
+    var sysClr: Color { scheme == .dark ? Color(hue: 0.08, saturation: 0.50, brightness: 0.92) : .orange }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -234,13 +236,20 @@ struct CPUPanel: View {
 
 struct MemoryPanel: View {
     @ObservedObject var stats: SystemStats
-
+    @Environment(\.colorScheme) var scheme
     var accent: Color {
         let f = stats.memTotal > 0 ? stats.memUsed / stats.memTotal : 0
-        if f < 0.5 { return Color(hue: 0.40, saturation: 0.45, brightness: 0.88) }
-        if f < 0.7 { return Color(hue: 0.14, saturation: 0.50, brightness: 0.92) }
-        if f < 0.85 { return Color(hue: 0.08, saturation: 0.55, brightness: 0.92) }
-        return Color(hue: 0.0, saturation: 0.55, brightness: 0.90)
+        if scheme == .dark {
+            if f < 0.5 { return Color(hue: 0.40, saturation: 0.45, brightness: 0.88) }
+            if f < 0.7 { return .yellow }
+            if f < 0.85 { return .orange }
+            return .red
+        } else {
+            if f < 0.5 { return .green }
+            if f < 0.7 { return .orange }
+            if f < 0.85 { return .red }
+            return .red
+        }
     }
 
     var body: some View {
@@ -281,8 +290,9 @@ struct MemoryPanel: View {
 
 struct NetworkPanel: View {
     @ObservedObject var stats: SystemStats
-    private let dnClr = Color(hue: 0.55, saturation: 0.40, brightness: 0.92)
-    private let upClr = Color(hue: 0.88, saturation: 0.35, brightness: 0.90)
+    @Environment(\.colorScheme) var scheme
+    var dnClr: Color { scheme == .dark ? .green : .indigo }
+    var upClr: Color { scheme == .dark ? .red : .red }
 
     var peak: Double { max(stats.netInHistory.max() ?? 0, stats.netOutHistory.max() ?? 0, 1024) }
 
@@ -325,6 +335,7 @@ struct NetworkPanel: View {
 struct WidgetView: View {
     @StateObject private var stats = SystemStats()
     @State private var isFloating = false
+    @Environment(\.colorScheme) var scheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -344,10 +355,8 @@ struct WidgetView: View {
                 .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
         }
         .frame(width: 230)
-        .onTapGesture {
-            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
-        }
-        .glassEffect(.clear, in: .rect(cornerRadius: 22, style: .continuous))
+        .glassEffect(scheme == .dark ? .clear : .clear.tint(.white.opacity(0.92)),
+                     in: .rect(cornerRadius: 22, style: .continuous))
         .contextMenu {
             Button(isFloating ? "Stick to Desktop" : "Float Above Windows") {
                 isFloating.toggle()
@@ -362,8 +371,29 @@ struct WidgetView: View {
                 }
             }
             Divider()
+            Button("Activity Monitor") {
+                NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
+            }
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
+    }
+}
+
+// MARK: - Always-active panel (prevents glass dimming on focus loss)
+
+class WidgetPanel: NSPanel {
+    override var isKeyWindow: Bool { true }
+    override var isMainWindow: Bool { true }
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    // Override private API — tells the glass compositor this window is "active"
+    // Only force active in light mode; dark mode looks better with natural inactive blur
+    @objc var _hasActiveAppearance: Bool {
+        effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .aqua
+    }
+    @objc var hasKeyAppearance: Bool {
+        effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .aqua
     }
 }
 
@@ -373,7 +403,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: NSPanel!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel = NSPanel(
+        panel = WidgetPanel(
             contentRect: NSRect(x: 0, y: 0, width: 260, height: 320),
             styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
@@ -391,7 +421,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .transient]
         panel.isMovableByWindowBackground = true
-
         let hosting = NSHostingView(rootView: WidgetView())
         panel.contentView = hosting
 
@@ -400,6 +429,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             panel.setFrameOrigin(NSPoint(x: f.maxX - 270, y: f.maxY - 340))
         }
         panel.orderFrontRegardless()
+
+        // When app loses focus, force glass back to active appearance
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.forceActiveGlass(self.panel.contentView)
+                NotificationCenter.default.post(name: NSWindow.didBecomeMainNotification, object: self.panel)
+                NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: self.panel)
+            }
+        }
+    }
+
+    /// Walk the view tree and force any NSVisualEffectView/NSGlassEffectView to active state
+    func forceActiveGlass(_ view: NSView?) {
+        guard let view = view else { return }
+        if let vev = view as? NSVisualEffectView {
+            vev.state = .active
+        }
+        // Try private API for glass effect views
+        let sel = NSSelectorFromString("setState:")
+        if view.className.contains("Glass"), view.responds(to: sel) {
+            view.perform(sel, with: NSNumber(value: 1)) // 1 = active
+        }
+        for sub in view.subviews { forceActiveGlass(sub) }
     }
 }
 
