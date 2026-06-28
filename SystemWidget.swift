@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Darwin
+import IOKit
 
 // MARK: - Formatting
 
@@ -27,6 +28,14 @@ class SystemStats: ObservableObject {
     @Published var cpuUser: Double = 0
     @Published var cpuSys: Double = 0
     @Published var cpuIdle: Double = 100
+
+    @Published var gpuHistory: [Double] = Array(repeating: 0, count: N)
+    @Published var gpuRendererHistory: [Double] = Array(repeating: 0, count: N)
+    @Published var gpuTilerHistory: [Double] = Array(repeating: 0, count: N)
+    @Published var gpuDevice: Double = 0
+    @Published var gpuRenderer: Double = 0
+    @Published var gpuTiler: Double = 0
+    @Published var gpuMemUsed: Double = 0
 
     @Published var memHistory: [Double] = Array(repeating: 0, count: N)
     @Published var memUsed: Double = 0
@@ -55,7 +64,7 @@ class SystemStats: ObservableObject {
         }
     }
 
-    func tick() { tickCPU(); tickMem(); tickNet(); isFirst = false }
+    func tick() { tickCPU(); tickGPU(); tickMem(); tickNet(); isFirst = false }
 
     func tickCPU() {
         var info: processor_info_array_t?
@@ -87,6 +96,37 @@ class SystemStats: ObservableObject {
             }
         }
         prevTicks = (tU, tS, tI, tN)
+    }
+
+    func tickGPU() {
+        var iterator: io_iterator_t = 0
+        guard let matching = IOServiceMatching("IOAccelerator") else { return }
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else { return }
+        defer { IOObjectRelease(iterator) }
+
+        var entry = IOIteratorNext(iterator)
+        while entry != 0 {
+            var props: Unmanaged<CFMutableDictionary>?
+            if IORegistryEntryCreateCFProperties(entry, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+               let dict = props?.takeRetainedValue() as? [String: Any],
+               let perf = dict["PerformanceStatistics"] as? [String: Any] {
+                if let d = perf["Device Utilization %"] as? NSNumber { gpuDevice = d.doubleValue }
+                if let r = perf["Renderer Utilization %"] as? NSNumber { gpuRenderer = r.doubleValue }
+                if let t = perf["Tiler Utilization %"] as? NSNumber { gpuTiler = t.doubleValue }
+                if let m = perf["In use system memory"] as? NSNumber { gpuMemUsed = m.doubleValue }
+            }
+            IOObjectRelease(entry)
+            entry = IOIteratorNext(iterator)
+        }
+
+        gpuHistory.append(gpuDevice / 100.0)
+        gpuRendererHistory.append(gpuRenderer / 100.0)
+        gpuTilerHistory.append(gpuTiler / 100.0)
+        if gpuHistory.count > Self.N {
+            gpuHistory.removeFirst()
+            gpuRendererHistory.removeFirst()
+            gpuTilerHistory.removeFirst()
+        }
     }
 
     func tickMem() {
@@ -196,37 +236,49 @@ struct GraphWell<Content: View>: View {
 struct CPUPanel: View {
     @ObservedObject var stats: SystemStats
     @Environment(\.colorScheme) var scheme
-    var accent: Color { scheme == .dark ? Color(hue: 0.40, saturation: 0.50, brightness: 0.88) : .green }
+    var cpuClr: Color { scheme == .dark ? Color(hue: 0.40, saturation: 0.50, brightness: 0.88) : .green }
     var sysClr: Color { scheme == .dark ? Color(hue: 0.08, saturation: 0.50, brightness: 0.92) : .orange }
+    var gpuClr: Color { scheme == .dark ? Color(hue: 0.78, saturation: 0.55, brightness: 0.90) : .purple }
 
     var body: some View {
         VStack(spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text("CPU")
+                Text("CPU/GPU")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.primary.opacity(0.85))
                 Spacer()
                 Text(String(format: "%.0f%%", stats.cpuUser + stats.cpuSys))
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(accent)
+                    .foregroundStyle(cpuClr)
+                Text(String(format: "%.0f%%", stats.gpuDevice))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(gpuClr)
             }
             .padding(.horizontal, 2)
 
             GraphWell {
+                // CPU areas
                 AreaShape(data: zip(stats.cpuUserHistory, stats.cpuSysHistory).map { $0 + $1 }, peak: 1.0)
                     .fill(LinearGradient(colors: [sysClr.opacity(0.45), sysClr.opacity(0.02)], startPoint: .top, endPoint: .bottom))
                 AreaShape(data: stats.cpuUserHistory, peak: 1.0)
-                    .fill(LinearGradient(colors: [accent.opacity(0.5), accent.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                    .fill(LinearGradient(colors: [cpuClr.opacity(0.5), cpuClr.opacity(0.02)], startPoint: .top, endPoint: .bottom))
                 LineShape(data: stats.cpuHistory, peak: 1.0)
-                    .stroke(accent.opacity(0.8), lineWidth: 1)
+                    .stroke(cpuClr.opacity(0.8), lineWidth: 1)
+                // GPU overlay
+                AreaShape(data: stats.gpuHistory, peak: 1.0)
+                    .fill(LinearGradient(colors: [gpuClr.opacity(0.3), gpuClr.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                LineShape(data: stats.gpuHistory, peak: 1.0)
+                    .stroke(gpuClr.opacity(0.8), lineWidth: 1)
             }
 
             HStack(spacing: 6) {
-                Circle().fill(accent.opacity(0.7)).frame(width: 4, height: 4)
+                Circle().fill(cpuClr.opacity(0.7)).frame(width: 4, height: 4)
                 Text(String(format: "%.0f%% user", stats.cpuUser))
                 Circle().fill(sysClr.opacity(0.7)).frame(width: 4, height: 4)
                 Text(String(format: "%.0f%% sys", stats.cpuSys))
                 Spacer()
+                Circle().fill(gpuClr.opacity(0.7)).frame(width: 4, height: 4)
+                Text(String(format: "%.0f%% gpu", stats.gpuDevice))
             }
             .font(.system(size: 9)).foregroundStyle(.secondary)
             .padding(.horizontal, 2)

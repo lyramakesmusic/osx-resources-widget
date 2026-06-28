@@ -2,7 +2,7 @@
 set -e
 cd "$(dirname "$0")"
 
-APP="SystemWidget.app"
+APP="ResourceDisplayWidget.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
@@ -10,7 +10,8 @@ echo "Compiling..."
 swiftc -O \
     -framework SwiftUI \
     -framework AppKit \
-    -o "$APP/Contents/MacOS/SystemWidget" \
+    -framework IOKit \
+    -o "$APP/Contents/MacOS/ResourceDisplayWidget" \
     SystemWidget.swift
 
 cat > "$APP/Contents/Info.plist" << 'EOF'
@@ -19,15 +20,15 @@ cat > "$APP/Contents/Info.plist" << 'EOF'
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>SystemWidget</string>
+    <string>ResourceDisplayWidget</string>
     <key>CFBundleIdentifier</key>
-    <string>com.lyra.systemwidget</string>
+    <string>com.lyra.resourcedisplaywidget</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>SystemWidget</string>
+    <string>ResourceDisplayWidget</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>
@@ -37,4 +38,4 @@ cat > "$APP/Contents/Info.plist" << 'EOF'
 EOF
 
 echo "Built $APP"
-echo "Run: open ~/Projects/system-widget/SystemWidget.app"
+echo "Run: open ~/Projects/system-widget/ResourceDisplayWidget.app"
